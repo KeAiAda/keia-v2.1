@@ -22,8 +22,6 @@
 
 ## Установка и запуск
 
-## Установка и запуск
-
 1. **Клонируйте репозиторий:**
    ```bash
    git clone https://github.com/KeAiAda/keia-v2.1.git
@@ -34,12 +32,12 @@
   python -m venv .venv
   source .venv/bin/activate  # Для Linux/macOS
   .venv\Scripts\activate     # Для Windows
-  pip install -r requirements.txt
+  pip install -r requirements.txt`
 
 3. **Настройте переменные окружения:**
   Скопируйте шаблон .env.example в .env:
   ```bash  
-  cp .env.example .env
+  cp .env.example .env`
    
    Откройте .env и заполните:
    - DISCORD_TOKEN — токен вашего бота.
@@ -48,7 +46,7 @@
 
 4. **Запустите:**
   ```bash
-  python main.py
+  python main.py`
 
 ## Кастомизация
 
