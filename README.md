@@ -28,25 +28,26 @@
    cd keia-v2.1
 
 2. **Создайте виртуальное окружение и установите зависимости:**
-  ```bash  
-  python -m venv .venv
-  source .venv/bin/activate  # Для Linux/macOS
-  .venv\Scripts\activate     # Для Windows
-  pip install -r requirements.txt`
+   ```bash
+   python -m venv .venv
+   source .venv/bin/activate  # Для Linux/macOS
+   .venv\Scripts\activate     # Для Windows
+   pip install -r requirements.txt
 
 3. **Настройте переменные окружения:**
   Скопируйте шаблон .env.example в .env:
-  ```bash  
-  cp .env.example .env`
-   
-   Откройте .env и заполните:
+   ```bash
+   cp .env.example .env
+  
+  Откройте .env и заполните:
    - DISCORD_TOKEN — токен вашего бота.
    - OWNER_ID — ваш Discord ID.
    - LLM_API_KEY — ваш ключ от нейросети.
 
 4. **Запустите:**
-  ```bash
-  python main.py`
+   ```bash
+   python main.py
+
 
 ## Кастомизация
 
