@@ -12,6 +12,7 @@ from datetime import datetime
 from core import config
 from core import storage
 from core import llm
+from core import logger
 
 
 # -------------------------------------------------------------------
@@ -95,35 +96,52 @@ def _extract_prompt() -> str:
     return storage.load_text(config.PROMPTS_DIR / "extract_facts.txt").strip()
 
 
-async def extract(user_text: str, user_id: int) -> None:
+async def extract(user_text: str, user_id: int, user_name: str = "Пользователь") -> None:
     """
     Извлечь факт из сообщения и сохранить, если он есть.
-    Запускается ПОСЛЕ ответа Кеи, не блокирует основной ответ.
     """
-    # Отсеиваем слишком короткие сообщения — там точно нет фактов.
+    # 1. Отсеиваем слишком короткие сообщения
     if len(user_text.strip()) < 5:
         return
 
-    prompt = _extract_prompt()
-    if not prompt:
+    # 2. Загружаем промпт и подставляем имя пользователя
+    prompt_template = _extract_prompt()
+    if not prompt_template:
+        return
+    prompt = prompt_template.replace("{user_name}", user_name)
+
+    try:
+        raw = await llm.chat(
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": user_text}, # Отправляем ТОЛЬКО текст пользователя
+            ],
+            model=config.LLM_UTILITY_MODEL,
+            max_tokens=100,
+            temperature=0.1, # Снизили температуру для максимальной точности
+            response_format={"type": "json_object"},
+        )
+    except Exception as e:
+        logger.log(f"Ошибка запроса: {e}", source="facts")
         return
 
     try:
-        # Отдельный запрос к модели. Низкая температура — точность важнее креатива.
+        # 3. Отдельный запрос к модели (используем дешевую модель)
         raw = await llm.chat(
             messages=[
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": user_text},
             ],
+            model=config.LLM_UTILITY_MODEL,  # ← Передаем дешевую модель
             max_tokens=100,
             temperature=0.2,
             response_format={"type": "json_object"},
         )
     except Exception as e:
-        print(f"[facts] Ошибка запроса: {e}")
+        logger.log(f"Ошибка запроса: {e}", source="facts")
         return
 
-    # Парсим ответ. Модель может добавить ```json ... ``` — чистим.
+    # 4. Парсим ответ. Модель может добавить ```json ... ``` — чистим.
     raw = raw.strip()
     raw = re.sub(r"^```(?:json)?\s*", "", raw)
     raw = re.sub(r"\s*```$", "", raw)
@@ -131,7 +149,7 @@ async def extract(user_text: str, user_id: int) -> None:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
-        print(f"[facts] Не смог распарсить JSON: {raw[:80]}")
+        logger.log(f"Не смог распарсить JSON: {raw[:80]}", source="facts")
         return
 
     if data.get("type") != "FACT":
@@ -143,10 +161,10 @@ async def extract(user_text: str, user_id: int) -> None:
     if not key or not value:
         return
 
-    # Сохраняем.
+    # 5. Сохраняем.
     changed = _add_or_replace(user_id, key, value)
     if changed:
-        print(f"[facts] Запомнила: {key} = {value}")
+        logger.log(f"Запомнила: {key} = {value}", source="facts")
 
 
 # -------------------------------------------------------------------
@@ -184,7 +202,7 @@ def _tokenize(text: str) -> list[str]:
     return [w for w in words if w not in _STOP_WORDS and len(w) > 2]
 
 
-def get_relevant(user_id: int, query: str, limit: int = 15) -> str:
+def get_relevant(user_id: int, query: str, limit: int = 8) -> str:
     """
     Вернуть релевантные факты в виде текста для промпта.
     Если фактов мало — возвращает все.

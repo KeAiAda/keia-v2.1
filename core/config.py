@@ -101,6 +101,9 @@ LLM_API_KEY = os.getenv("LLM_API_KEY", "sk-no-key-required")
 # но openai-клиент требует, чтобы поле было.
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5-1.5b-instruct")
 
+# Дешевая модель для служебных задач (факты, проактивность)
+LLM_UTILITY_MODEL = os.getenv("LLM_UTILITY_MODEL", LLM_MODEL) # если не задана, юзаем основную
+
 # Максимум токенов на один ответ модели.
 # Чем больше — тем дольше генерация. 300 — разумно для диалога.
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "300"))
@@ -126,3 +129,6 @@ OWNER_ID = int(os.getenv("OWNER_ID") or "0")
 
 # ID канала, куда Кея пишет сама.
 ACTIVITY_CHANNEL_ID = int(os.getenv("ACTIVITY_CHANNEL_ID") or "0")
+
+# Telegram
+TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "")

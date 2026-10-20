@@ -13,17 +13,29 @@ from openai import AsyncOpenAI
 
 from core import config
 
+import httpx
+from core import config
+
 # -------------------------------------------------------------------
 # 1. Клиент
 # -------------------------------------------------------------------
 
 # Создаём один клиент на весь проект — так правильнее, чем новый на каждый запрос.
 # Внутри клиент держит пул HTTP-соединений, что экономит время и ресурсы.
+
+# 1. Вычищаем API-ключ от любых случайных кириллических символов
+clean_api_key = "".join(c for c in config.LLM_API_KEY if c.isascii()).strip()
+
+# 2. Создаем свой http-клиент, который ИГНОРИРУЕТ системные прокси и VPN
+# trust_env=False — спасает от ошибки ascii codec с ВПН
+http_client = httpx.AsyncClient(trust_env=False, timeout=40.0)
+
 client = AsyncOpenAI(
     # base_url — куда стучаться. Из config (читается из .env).
     base_url=config.LLM_BASE_URL,
     # api_key — для локального llama-server ключ не нужен, но клиент требует строку.
     api_key=config.LLM_API_KEY,
+    http_client=http_client, # <--- вот это спасает от ошибки
 )
 
 
@@ -31,7 +43,7 @@ client = AsyncOpenAI(
 # 2. Основная функция — поговорить с моделью
 # -------------------------------------------------------------------
 
-async def chat(messages: list[dict], **options) -> str:
+async def chat(messages: list[dict], model: str | None = None, **options) -> str:
     """
     Отправить messages модели и получить ответ (строкой).
 
@@ -46,7 +58,7 @@ async def chat(messages: list[dict], **options) -> str:
     # Склеиваем дефолтные настройки (из config) и то, что передали аргументом.
     # Если в options есть ключ — он перекрывает дефолт. Иначе берём дефолт.
     params = {
-        "model": config.LLM_MODEL,
+        "model": config.LLM_MODEL or config.LLM_MODEL,
         "messages": messages,
         "max_tokens": options.get("max_tokens", config.LLM_MAX_TOKENS),
         "temperature": options.get("temperature", config.LLM_TEMPERATURE),
