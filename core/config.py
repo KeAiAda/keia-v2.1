@@ -6,8 +6,7 @@
 # -------------------------------------------------------------------
 
 import os
-# os — стандартный модуль Python для работы с файловой системой
-# и переменными окружения (os.getenv, os.path)
+# os — стандартный модуль Python для работы с файловой системой и переменными окружения.
 
 from pathlib import Path
 # Path — современный способ работать с путями (лучше, чем os.path).
@@ -15,7 +14,6 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 # load_dotenv — читает файл .env и добавляет переменные в окружение процесса.
-# Устанавливается командой: pip install python-dotenv (сделаем позже)
 
 
 # -------------------------------------------------------------------
@@ -28,8 +26,7 @@ from dotenv import load_dotenv
 # .parent ещё раз — папка на уровень выше (корень проекта keia-v2/).
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-# Теперь PROJECT_ROOT — это /home/keaiada/Projects/keia-v2
-# независимо от того, из какой папки ты запустил скрипт.
+# Теперь PROJECT_ROOT — это абсолютный путь к папке keia-v2.
 
 
 # -------------------------------------------------------------------
@@ -37,27 +34,24 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # -------------------------------------------------------------------
 
 # Загружаем .env из корня проекта.
-# load_dotenv НЕ перезаписывает уже существующие переменные окружения —
-# это удобно: можно временно переопределить через `export X=...` в терминале.
+# load_dotenv НЕ перезаписывает уже существующие переменные окружения.
 load_dotenv(PROJECT_ROOT / ".env")
 
 
 # -------------------------------------------------------------------
-# 3. Пути к папкам
+# 3. Пути к папкам и файлам
 # -------------------------------------------------------------------
 
 # Оператор / с Path склеивает пути кроссплатформенно.
-# Path("/home/user") / "memory" = Path("/home/user/memory")
 
 MEMORY_DIR = PROJECT_ROOT / "memory"
-# Папка со всей долговременной памятью: факты, история, напоминания, дневник.
+# Папка со всей долговременной памятью.
 
 PROMPTS_DIR = PROJECT_ROOT / "core" / "prompts"
-# Папка с текстовыми промптами (persona, extract_facts и т.д.).
-# Отдельно от кода — чтобы менять промпты, не трогая .py файлы.
+# Папка с текстовыми промптами (характер, факты и т.д.).
 
 LOGS_DIR = MEMORY_DIR / "logs"
-# Сырые логи чата (что было сказано в каждый день).
+# Сырые логи чата и системные логи.
 
 FACTS_DIR = MEMORY_DIR / "facts"
 # Файлы с фактами о пользователях (по одному .txt на пользователя).
@@ -66,18 +60,11 @@ JOURNAL_DIR = MEMORY_DIR / "journal"
 # Записи дневника Кеи (по одной .md на день).
 
 HISTORY_FILE = MEMORY_DIR / "chat_histories.json"
-# История диалогов (последние N сообщений каждого пользователя).
-
-REMINDERS_FILE = MEMORY_DIR / "reminders.json"
-# Список активных напоминаний.
-
-PROACTIVE_STATE_FILE = MEMORY_DIR / "proactive_state.json"
-# Состояние проактивности: когда пользователь последний раз писал,
-# когда Кея последний раз писала сама.
+# История диалогов (кратковременная память).
 
 # Создаём все папки, если их нет.
-# parents=True — создать и родительские папки (например, memory/).
-# exist_ok=True — не падать, если папка уже есть.
+# parents=True — создать и родительские папки.
+# exist_ok=True — не падать с ошибкой, если папка уже есть.
 for _dir in [MEMORY_DIR, LOGS_DIR, FACTS_DIR, JOURNAL_DIR, PROMPTS_DIR]:
     _dir.mkdir(parents=True, exist_ok=True)
 
@@ -86,49 +73,35 @@ for _dir in [MEMORY_DIR, LOGS_DIR, FACTS_DIR, JOURNAL_DIR, PROMPTS_DIR]:
 # 4. Настройки LLM
 # -------------------------------------------------------------------
 
-# Адрес llama-server. По умолчанию — локальный.
-# Если захочешь переключиться на облако (OpenRouter, polza.ai и т.д.) —
-# просто поменяешь эту переменную в .env, код останется тот же.
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://127.0.0.1:8080/v1")
+# Адрес API (Polza AI, OpenRouter или локальный llama-server).
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://polza.ai/api/v1")
 
-# API-ключ для LLM.
-# Для локального llama-server ключ НЕ НУЖЕН, но клиент openai требует,
-# чтобы строка была непустой — поэтому дефолт "sk-no-key-required".
-# Для облака (OpenRouter) — тут будет реальный ключ из .env.
-LLM_API_KEY = os.getenv("LLM_API_KEY", "sk-no-key-required")
+# API-ключ для доступа к модели.
+LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 
-# Имя модели. llama-server игнорирует это поле (он знает свою модель),
-# но openai-клиент требует, чтобы поле было.
-LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5-1.5b-instruct")
+# Основная (умная) модель для чата.
+LLM_MODEL = os.getenv("LLM_MODEL", "deepseek/deepseek-v4.1-flash-1017")
 
-# Дешевая модель для служебных задач (факты, проактивность)
-LLM_UTILITY_MODEL = os.getenv("LLM_UTILITY_MODEL", LLM_MODEL) # если не задана, юзаем основную
+# Дешевая модель для служебных задач (факты, события, анализ симпатии).
+LLM_UTILITY_MODEL = os.getenv("LLM_UTILITY_MODEL", "openai/gpt-5-nano")
 
 # Максимум токенов на один ответ модели.
-# Чем больше — тем дольше генерация. 300 — разумно для диалога.
-LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "300"))
+LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "800"))
 
-# Температура: 0 = детерминированно (одно и то же), 1.5 = хаотично.
-# 0.7-0.9 — золотая середина для «живого» но связного диалога.
+# Температура: 0 = детерминированно, 1.0+ = хаотично.
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.8"))
 
-# Размер контекста: сколько последних сообщений держать в истории.
-# Помни: llama-server запущен с -c 4096, это общий лимит токенов.
+# Сколько последних сообщений держать в кратковременной памяти (истории).
 LLM_HISTORY_LIMIT = int(os.getenv("LLM_HISTORY_LIMIT", "10"))
 
 
 # -------------------------------------------------------------------
-# 5. Настройки Discord (пока не используем, но пусть будут)
+# 5. Настройки Discord
 # -------------------------------------------------------------------
 
-# Токен бота Discord. Пусто — если ещё не настроен.
+# Токен бота Discord.
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "")
 
-# ID владельца (твой Discord ID). Нужен для проактивности.
+# ID владельца (твой Discord ID). Нужен для проактивности и привилегий.
+# Если переменная не задана, int(None) выдаст ошибку, поэтому ставим "0" по умолчанию.
 OWNER_ID = int(os.getenv("OWNER_ID") or "0")
-
-# ID канала, куда Кея пишет сама.
-ACTIVITY_CHANNEL_ID = int(os.getenv("ACTIVITY_CHANNEL_ID") or "0")
-
-# Telegram
-TG_BOT_TOKEN = os.getenv("TG_BOT_TOKEN", "")

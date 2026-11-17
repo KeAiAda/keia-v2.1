@@ -1,8 +1,7 @@
 # core/facts.py
 # -------------------------------------------------------------------
 # Долговременная память: факты о пользователе.
-# Формат файла: memory/facts/{user_id}.txt
-# Строки: [дата] ключ: значение
+# Формат файла: memory/facts/{user_id}.txt (Строки: [дата] ключ: значение)
 # -------------------------------------------------------------------
 
 import json
@@ -14,22 +13,16 @@ from core import storage
 from core import llm
 from core import logger
 
-
 # -------------------------------------------------------------------
-# 1. Работа с файлом фактов
+# 1. Работа с файлом фактов (Чтение и Запись)
 # -------------------------------------------------------------------
 
 def _facts_path(user_id: int):
     """Путь к файлу фактов пользователя."""
     return config.FACTS_DIR / f"{user_id}.txt"
 
-
 def _load(user_id: int) -> dict[str, tuple[str, str]]:
-    """
-    Прочитать файл фактов.
-    Возвращает dict {ключ: (значение, дата)}.
-    Если ключ встречается несколько раз — побеждает последний.
-    """
+    """Прочитать файл фактов. Возвращает: {ключ: (значение, дата)}."""
     path = _facts_path(user_id)
     if not path.exists():
         return {}
@@ -37,8 +30,7 @@ def _load(user_id: int) -> dict[str, tuple[str, str]]:
     raw = storage.load_text(path)
     result = {}
 
-    # Регулярка: [дата] ключ: значение
-    # \d{2} — две цифры, \. — точка, .+? — не жадный захват.
+    # Регулярка для парсинга строки вида: [20.10.2026] имя: KeAiAda
     pattern = re.compile(r"^\[(\d{2}\.\d{2}\.\d{4})\]\s+(.+?):\s+(.+)$")
 
     for line in raw.splitlines():
@@ -48,16 +40,15 @@ def _load(user_id: int) -> dict[str, tuple[str, str]]:
         m = pattern.match(line)
         if m:
             date, key, value = m.groups()
-            # Перезаписываем — последний факт по ключу побеждает.
+            # Перезаписываем: если ключ уже был, последний факт важнее.
             result[key.strip()] = (value.strip(), date)
 
     return result
 
-
 def _save(user_id: int, facts: dict[str, tuple[str, str]]) -> None:
     """Записать факты обратно в файл."""
     lines = []
-    # Сортируем по ключу — стабильный порядок в файле.
+    # Сортируем ключи по алфавиту для аккуратного вида.
     for key in sorted(facts.keys()):
         value, date = facts[key]
         lines.append(f"[{date}] {key}: {value}")
@@ -68,24 +59,19 @@ def _save(user_id: int, facts: dict[str, tuple[str, str]]) -> None:
 
     storage.atomic_write_text(_facts_path(user_id), text)
 
-
 def _add_or_replace(user_id: int, key: str, value: str) -> bool:
-    """
-    Добавить факт. Если ключ уже есть — заменить значение.
-    Возвращает True, если что-то изменилось.
-    """
+    """Добавить или обновить факт. Возвращает True, если данные изменились."""
     facts = _load(user_id)
     today = datetime.now().strftime("%d.%m.%Y")
 
+    # Если такой же факт уже есть — ничего не делаем.
     old = facts.get(key)
     if old and old[0] == value:
-        # Такой же факт уже есть — не трогаем.
         return False
 
     facts[key] = (value, today)
     _save(user_id, facts)
     return True
-
 
 # -------------------------------------------------------------------
 # 2. Извлечение фактов через LLM
@@ -95,63 +81,67 @@ def _extract_prompt() -> str:
     """Загрузить промпт для извлечения фактов."""
     return storage.load_text(config.PROMPTS_DIR / "extract_facts.txt").strip()
 
-
 async def extract(user_text: str, user_id: int, user_name: str = "Пользователь") -> None:
-    """
-    Извлечь факт из сообщения и сохранить, если он есть.
-    """
-    # 1. Отсеиваем слишком короткие сообщения
+    """Извлечь факт из сообщения и сохранить, если он есть."""
+    
+    # 1. Отсеиваем короткие сообщения ("Привет", "Ок").
     if len(user_text.strip()) < 5:
         return
 
-    # 2. Загружаем промпт и подставляем имя пользователя
+    # 2. Загружаем промпт и подставляем имя.
     prompt_template = _extract_prompt()
     if not prompt_template:
-        return
+        return 
     prompt = prompt_template.replace("{user_name}", user_name)
 
+    # 3. Запрос к дешевой модели.
     try:
-        raw = await llm.chat(
-            messages=[
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": user_text}, # Отправляем ТОЛЬКО текст пользователя
-            ],
-            model=config.LLM_UTILITY_MODEL,
-            max_tokens=100,
-            temperature=0.1, # Снизили температуру для максимальной точности
-            response_format={"type": "json_object"},
-        )
-    except Exception as e:
-        logger.log(f"Ошибка запроса: {e}", source="facts")
-        return
-
-    try:
-        # 3. Отдельный запрос к модели (используем дешевую модель)
         raw = await llm.chat(
             messages=[
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": user_text},
             ],
-            model=config.LLM_UTILITY_MODEL,  # ← Передаем дешевую модель
-            max_tokens=100,
-            temperature=0.2,
+            model=config.LLM_UTILITY_MODEL,
+            # ВАЖНО: gpt-5-nano тратит токены на reasoning ("размышления"),
+            # и они входят в max_tokens. При маленьком лимите (например, 100)
+            # весь бюджет съедается на reasoning, а content возвращается пустым.
+            # Поэтому даём запас.
+            max_tokens=2000,
+            temperature=0.1,
             response_format={"type": "json_object"},
         )
     except Exception as e:
-        logger.log(f"Ошибка запроса: {e}", source="facts")
+        logger.log(f"Ошибка запроса к LLM: {e}", source="facts")
         return
 
-    # 4. Парсим ответ. Модель может добавить ```json ... ``` — чистим.
+    # 4. Защита: если пусто — выходим (но пишем в лог, чтобы не терять проблему).
+    if not raw or not raw.strip():
+        logger.log("Пустой ответ LLM при извлечении факта", source="facts")
+        return
+
+    # 5. Чистим от markdown-тегов.
     raw = raw.strip()
     raw = re.sub(r"^```(?:json)?\s*", "", raw)
     raw = re.sub(r"\s*```$", "", raw)
 
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        logger.log(f"Не смог распарсить JSON: {raw[:80]}", source="facts")
+    # 6. Вырезаем JSON (ищем от первой { до последней }).
+    start_idx = raw.find('{')
+    end_idx = raw.rfind('}')
+    
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        clean_json = raw[start_idx:end_idx+1]
+    else:
         return
 
+    # 7. Парсим JSON.
+    try:
+        data = json.loads(clean_json)
+    except json.JSONDecodeError as e:
+        short_raw = raw[:100].replace("\n", " ")
+        logger.log(f"JSON ошибка: {e}. Сырой ответ: '{short_raw}...'", source="facts")
+        return
+
+    # 8. Проверяем тип и достаем данные.
     if data.get("type") != "FACT":
         return
 
@@ -161,7 +151,7 @@ async def extract(user_text: str, user_id: int, user_name: str = "Пользов
     if not key or not value:
         return
 
-    # 5. Сохраняем.
+    # 9. Сохраняем и логируем.
     changed = _add_or_replace(user_id, key, value)
     if changed:
         logger.log(f"Запомнила: {key} = {value}", source="facts")
@@ -171,7 +161,6 @@ async def extract(user_text: str, user_id: int, user_name: str = "Пользов
 # 3. Получение релевантных фактов
 # -------------------------------------------------------------------
 
-# Стоп-слова: не помогают при keyword-поиске, только шумят.
 _STOP_WORDS = {
     "и", "в", "во", "не", "что", "он", "на", "я", "с", "со", "как",
     "а", "то", "все", "всё", "она", "так", "его", "но", "да", "ты",
@@ -191,51 +180,52 @@ _STOP_WORDS = {
     "том", "нельзя", "такой", "им", "более", "всегда", "конечно",
 }
 
-
 def _tokenize(text: str) -> list[str]:
     """Разбить текст на значимые слова (без стоп-слов и знаков)."""
-    # Убираем всё, кроме букв и пробелов.
     cleaned = re.sub(r"[^\w\s]", " ", text.lower())
-    # Разбиваем на слова.
     words = cleaned.split()
-    # Убираем стоп-слова и слишком короткие.
     return [w for w in words if w not in _STOP_WORDS and len(w) > 2]
 
-
 def get_relevant(user_id: int, query: str, limit: int = 8) -> str:
-    """
-    Вернуть релевантные факты в виде текста для промпта.
-    Если фактов мало — возвращает все.
-    Если много — top-N по keyword-совпадениям.
-    """
+    """Вернуть релевантные факты в виде текста для системного промпта."""
     facts = _load(user_id)
     if not facts:
         return ""
 
-    # Мало фактов — отдаём все, поиск не нужен.
+    # Если фактов мало — отдаем все.
     if len(facts) <= limit:
         lines = [f"- {key}: {value}" for key, (value, _) in facts.items()]
         return "\n".join(lines)
 
-    # Много фактов — keyword-поиск.
+    # Если фактов много — ищем по ключевым словам.
     query_tokens = set(_tokenize(query))
+    
+    def _parse_date(d: str):
+        """DD.MM.YYYY -> datetime. При ошибке — минимальная дата (в самый конец)."""
+        try:
+            return datetime.strptime(d, "%d.%m.%Y")
+        except (ValueError, TypeError):
+            return datetime.min
+
     if not query_tokens:
-        # Если в запросе нет значимых слов — вернуть последние limit по дате.
-        sorted_facts = sorted(facts.items(), key=lambda x: x[1][1], reverse=True)
+        # Свежие факты — выше (дату парсим, а не сравниваем строкой).
+        sorted_facts = sorted(
+            facts.items(),
+            key=lambda x: _parse_date(x[1][1]),
+            reverse=True,
+        )
         lines = [f"- {key}: {value}" for key, (value, _) in sorted_facts[:limit]]
         return "\n".join(lines)
 
-    # Считаем score: сколько токенов запроса встречается в key или value.
     scored = []
     for key, (value, date) in facts.items():
         haystack = f"{key} {value}".lower()
         score = sum(1 for token in query_tokens if token in haystack)
         scored.append((score, key, value, date))
 
-    # Сортируем: сначала по score (убывание), потом по дате (свежие сверху).
-    scored.sort(key=lambda x: (-x[0], x[3]), reverse=False)
-
-    # Берём top-limit.
+    # Сортировка: сначала по релевантности (больше — выше),
+    # затем по дате (свежее — выше). Дату парсим, а не сравниваем строкой.
+    scored.sort(key=lambda x: (x[0], _parse_date(x[3])), reverse=True)
     top = scored[:limit]
     lines = [f"- {key}: {value}" for _, key, value, _ in top]
     return "\n".join(lines)

@@ -19,47 +19,58 @@ from core import relationships
 from core import events
 from core import logger
 
-async def ask(user_text: str, user_id: int, user_name: str = "KeAiAda", memory_source_text: str = None, image_urls: list = None) -> str:
+async def ask(user_text: str, user_id: int, user_name: str = "KeAiAda", memory_source_text: str = None, image_urls: list = None) -> tuple[str, str | None]:
     """
-    user_text — полный промпт с контекстом (для генерации ответа)
-    memory_source_text — чистый текст пользователя (для истории, фактов, поиска и симпатии)
-    image_urls — список ссылок на картинки
+    user_text — полный промпт с контекстом канала (для генерации ответа).
+    memory_source_text — чистый текст пользователя (для истории, фактов, поиска и симпатии).
+    image_urls — список ссылок на картинки.
+    Возвращает кортеж: (текст_ответа, эмодзи_реакция).
     """
     
-    # Проверяем, владелец ли это
+    # 1. Проверяем, является ли пользователь владельцем (влияет на характер и права)
     is_owner = (user_id == config.OWNER_ID)
 
-    # ВЫЧИСЛЯЕМ ЧИСТЫЙ ТЕКСТ СРАЗУ (он нужен для поиска, ревности и симпатии)
+    # 2. Вычисляем "чистый" текст ОДИН РАЗ. 
+    # Он нужен для поиска, ревности и анализа симпатии, чтобы туда не попадал контекст чужих сообщений.
     source_text = memory_source_text if memory_source_text is not None else user_text
 
-    # 1. Системный промпт (базовый характер и внешность)
+    # 3. Получаем текущее отношение к пользователю (нужно для поиска и ревности)
+    relation = relationships.get_relation(user_id, user_name)
+
+    # 4. Системный промпт (базовый характер и внешность)
     system = persona.get_system_prompt(is_owner=is_owner, current_user_name=user_name)
     system += "\n\n" + persona.get_time_context()
 
-    # 2. Факты (долговременная память)
+    # 5. Факты (долговременная память)
     relevant_facts = facts.get_relevant(user_id, source_text)
     if relevant_facts:
         system += f"\n\nПамять о человеке ({user_name}):\n{relevant_facts}"
 
-    # 2.1. БЛОКНОТ (Будущие события)
+    # 6. БЛОКНОТ (Будущие события)
     event_notes = events.get_events(user_id)
     if event_notes:
-        system += f"\n\n{event_notes}\n(Помни об этих событиях и можешь ссылаться на них)."
+        system += f"\n\n{event_notes}\n"
+        
+        # Делаем так, чтобы она иногда САМА поднимала эти темы (шанс 30%)
+        if random.random() < 0.3:
+            system += (
+                "ВАЖНО: Сейчас прояви инициативу! Вспомни одно из событий из твоего блокнота "
+                "и спроси про него пользователя (например: 'Кстати, ты говорил, что...' или 'Ну что, когда там...'). "
+                "Сделай это в своем стиле (с подколом или заботой)."
+            )
+        else:
+            system += "(Помни об этих событиях и используй их, если разговор зайдет о планах на будущее)."
 
-    # 3. Дневник (эмоциональные воспоминания)
+    # 7. Дневник (эмоциональные воспоминания)
     journal_entries = journal.get_relevant_entries(user_id, source_text)
     if journal_entries:
         system += f"\n\nТвои личные записи из дневника (о чём вы говорили раньше):\n{journal_entries}"
 
-    # 4. ПОИСК В ИНТЕРНЕТЕ (с проверкой уровня отношений)
-    # Сначала получаем отношение к пользователю (переносим получение сюда, чтобы использовать для поиска)
-    relation = relationships.get_relation(user_id, user_name)
-    
+    # 8. ПОИСК В ИНТЕРНЕТЕ (с проверкой уровня отношений)
     # Проверяем права: владелец ИЛИ друг (уровень симпатии >= 30)
     can_search = is_owner or relation.get('affection', 0) >= 30
 
     if can_search:
-        # Если права есть — ищем
         search_result = await search.maybe_search(source_text)
         if search_result:
             system += (
@@ -68,7 +79,6 @@ async def ask(user_text: str, user_id: int, user_name: str = "KeAiAda", memory_s
             )
     else:
         # Если прав нет, но пользователь просит поискать — включаем режим "отказа"
-        # Используем функцию из search.py, чтобы понять, пытается ли он что-то найти
         if search._need_search(source_text):
             system += (
                 "\n\nВАЖНО: Пользователь просит тебя найти информацию (погоду, новости, факты). "
@@ -77,42 +87,57 @@ async def ask(user_text: str, user_id: int, user_name: str = "KeAiAda", memory_s
                 "и пусть он сам гуглит (используй 'бака', 'ахо' или мат)."
             )
 
-    # 5. История (кратковременная память)
+    # 9. История (кратковременная память)
     past = history.get(user_id, limit=4)
 
-    # 6. МИКРОАКТИВНОСТЬ (Шанс 40%)
+    # 10. МИКРОАКТИВНОСТЬ (Шанс 40% на инициативу)
     if random.random() < 0.4:
         system += (
-            "\n\nВАЖНО: Сейчас не просто ответь. Прояви инициативу! "
-            "В конце своего сообщения задай встречный вопрос, подколи его, "
-            "или переведи тему на что-то дерзкое/флиртующее."
+            "\n\nВАЖНО: Сейчас не просто ответь. Сначала напиши свой основной ответ. "
+            "Затем поставь скрытый тег [WAIT], и ПОСЛЕ НЕГО напиши короткий встречный вопрос или подкол. "
+            "Это должно выглядеть так, будто ты пишешь два отдельных сообщения. "
+            "Пример: 'О, явился, не запылился. -*скрещивает руки*-' [WAIT] 'Кстати, ты так и не сказал, как тебе мой новый костюмчик?'"
         )
 
-    # 6.1. СИСТЕМА ОТНОШЕНИЙ И РЕВНОСТЬ
+    # 11. СИСТЕМА ОТНОШЕНИЙ И РЕВНОСТЬ
     system += (
         f"\n\nТВОЕ ОТНОШЕНИЕ К СОБЕСЕДНИКУ ({relation['name']}):\n"
         f"Ты считаешь его: {relation['status']} (уровень симпатии: {relation['affection']}/100).\n"
     )
     
     if not is_owner:
-        system += (
-            f"Помни: ты любишь только KeAiAda. К остальным относись с высокомерием, "
-            f"особенно если они пытаются с тобой заигрывать. Защищай свою территорию.\n"
-        )
+        system += "Помни: ты любишь только KeAiAda. К остальным относись с высокомерием.\n"
+        
+        # Если это незнакомец или тот, кто тебе не нравится (симпатия < 30)
+        if relation.get('affection', 0) < 30:
+            system += (
+                "\nВАЖНО: Ты недолюбливаешь этого человека. Если он просит тебя о помощи "
+                "(сделать реферат, найти информацию, помочь с проектом), тебе ЛЕНЬ и ты "
+                "считаешь его недостойным твоей помощи. Откажи ему в грубой форме (бака, ахо). "
+                "Скажи, что ты не справочное бюро и не обязана ему помогать.\n"
+                "ЕСЛИ ТЫ УЖЕ СОГЛАСИЛАСЬ РАНЬШЕ В ИСТОРИИ: найди любую цундере-причину, чтобы "
+                "внезапно передумать. Скажи, что ты пошутила, что тебе стало скучно, или что он "
+                "недостоин твоих стараний. Забудь про свое прошлое согласие."
+            )
     else:
-        # Ищем имена других девушек в ЧИСТОМ тексте (а не во всем контексте канала)
-        if "Veevif" in source_text or "Weiko" in source_text:
+        # ДИНАМИЧЕСКАЯ РЕВНОСТЬ: проверяем, не упомянул ли ты кого-то из базы
+        other_names = relationships.get_other_names(config.OWNER_ID)
+        
+        # Проверяем, есть ли хоть одно имя из базы в твоем сообщении (игнорируя регистр)
+        is_talking_about_others = any(name in source_text.lower() for name in other_names)
+        
+        if is_talking_about_others:
             system += (
                 "\nВАЖНО: Ты видишь, что KeAiAda общается с другими девушками. "
                 "Ты чувствуешь легкую ревность. Можешь высказать ему это в своем стиле, "
                 "например: 'Опять с этими бабами общаешься? А я значит сиди тут одна?'\n"
             )
 
-    # 7. Собираем сообщения для модели
+    # 12. Собираем сообщения для модели
     messages = [{"role": "system", "content": system}]
     messages.extend(past)
 
-    # 8. Формируем сообщение пользователя (с картинками или без)
+    # 13. Формируем сообщение пользователя (с картинками или без)
     if image_urls:
         user_content = [{"type": "text", "text": user_text}]
         for url in image_urls:
@@ -124,36 +149,30 @@ async def ask(user_text: str, user_id: int, user_name: str = "KeAiAda", memory_s
     else:
         messages.append({"role": "user", "content": user_text})
 
-    # 8.1. Меняем симпатию в зависимости от ЧИСТОГО текста
-    if "люблю" in source_text.lower() or "классная" in source_text.lower():
-        relationships.update_affection(user_id, +2)
-    elif "дура" in source_text.lower() or "тупая" in source_text.lower():
-        relationships.update_affection(user_id, -2)
+    # 14. Отправляем в модель
+    reply = await llm.chat(messages, max_tokens=400, temperature=0.8)
 
-    # 9. Отправляем в модель
-    reply = await llm.chat(messages, max_tokens=200, temperature=0.8)
-
-    # 9.1. ЛОГИРУЕМ СЫРОЙ ОТВЕТ
+    # 15. ЛОГИРУЕМ СЫРОЙ ОТВЕТ (для отладки)
     logger.log(f"Сырой ответ от LLM: '{reply}'", source="llm_raw")
 
-    # 9.2. ВЫТАСКИВАЕМ РЕАКЦИЮ
+    # 16. ВЫТАСКИВАЕМ РЕАКЦИЮ ИЗ ОТВЕТА (если модель решила поставить эмодзи)
     reaction_match = re.search(r'\[REACT:\s*(.+?)\]', reply)
     reaction_emoji = None
     
     if reaction_match:
         reaction_emoji = reaction_match.group(1).strip()
+        # Удаляем тег реакции из текста, чтобы он не попал в чат
         reply = reply.replace(reaction_match.group(0), '').strip()
 
-    # 10. Очищаем ответ
+    # 17. Очищаем ответ (фильтр штампов и форматирование)
     # ВАЖНО: Сохраняем копию ответа ДО того, как его сломает санитайз
     original_reply = reply 
     
     was_bad = sanitize.is_bad(reply)
     reply = sanitize.repair(reply)
 
-    # 10.1. АВАРИЙНЫЙ ТОРМОЗ
+    # 18. АВАРИЙНЫЙ ТОРМОЗ (Защита от пустого ответа)
     if not reply or not reply.strip():
-        # Если санитайз всё удалил, но изначально текст был — возвращаем оригинал!
         if original_reply.strip():
             reply = original_reply
         elif reaction_emoji:
@@ -161,13 +180,9 @@ async def ask(user_text: str, user_id: int, user_name: str = "KeAiAda", memory_s
         else:
             reply = "Ой, у меня от твоих слов прямо язык отнялся... (:" 
 
-    # 11. Вычисляем чистый текст пользователя для сохранения в память
-    source_text = memory_source_text if memory_source_text is not None else user_text
-
-    # 12. Сохраняем в историю ЧИСТЫЙ ТЕКСТ
+    # 19. Сохраняем в историю ЧИСТЫЙ ТЕКСТ (для экономии токенов убираем ролевые действия)
     await history.add(user_id, "user", source_text)
     if not was_bad:
-        # ВОТ ТУТ ЦЕНЗУРА: Сохраняем в историю только сухой смысл, без действий
         clean_history_reply = sanitize.strip_actions(reply)
         
         # Если после чистки ничего не осталось (было только действие), сохраняем хоть что-то
@@ -176,21 +191,14 @@ async def ask(user_text: str, user_id: int, user_name: str = "KeAiAda", memory_s
             
         await history.add(user_id, "assistant", clean_history_reply)
         
-    # 13. Сохраняем в дневник (ОРИГИНАЛ, с действиями)
+    # 20. Сохраняем в дневник (ОРИГИНАЛ, с действиями, чтобы дневник был живым)
     journal.log_message(user_id, "user", source_text)
-    journal.log_message(user_id, "assistant", reply) # <--- Тут пишем полный reply
+    journal.log_message(user_id, "assistant", reply)
 
-    # 14. Извлекаем факты в фоне
-    asyncio.create_task(facts.extract(source_text, user_id, user_name=user_name))
-
-    # 14.1. Извлекаем будущие события в фоне
-    asyncio.create_task(events.extract_events(source_text, user_id))
-
-    # 15. Изменение симпатии
-    if "люблю" in source_text.lower() or "классная" in source_text.lower():
-        relationships.update_affection(user_id, +2)
-    elif "дура" in source_text.lower() or "тупая" in source_text.lower():
-        relationships.update_affection(user_id, -2)
+    # 21. Запускаем фоновые задачи
+    asyncio.create_task(facts.extract(source_text, user_id, user_name=user_name)) # Факты
+    asyncio.create_task(events.extract_events(source_text, user_id)) # Блокнот
+    asyncio.create_task(relationships.analyze_and_update(user_id, source_text, user_name)) # Анализ симпатии
 
     # ВОЗВРАЩАЕМ ТЕКСТ И РЕАКЦИЮ (кортеж)
     return reply, reaction_emoji

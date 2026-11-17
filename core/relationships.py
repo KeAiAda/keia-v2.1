@@ -1,15 +1,13 @@
 # core/relationships.py
 # -------------------------------------------------------------------
-# Система отношений Кеи с пользователями.
-# Хранит уровни симпатии и статусы в JSON-файле.
+# Система отношений Кеи с пользователями (уровень симпатии).
 # -------------------------------------------------------------------
 
-from core import config
-from core import storage
-from core import logger
 import json
+import re
+from core import config, storage, llm, logger
 
-# Путь к файлу с отношениями
+# Путь к файлу с отношениями.
 RELATIONSHIPS_FILE = config.MEMORY_DIR / "relationships.json"
 
 def _load() -> dict:
@@ -21,63 +19,118 @@ def _save(data: dict) -> None:
     storage.atomic_write_json(RELATIONSHIPS_FILE, data)
 
 def get_relation(user_id: int, name: str = None) -> dict:
-    """
-    Возвращает отношение к пользователю.
-    Если пользователя нет в базе — создает дефолтное отношение.
-    """
+    """Возвращает отношение к пользователю (создает дефолтное, если нет)."""
     data = _load()
     user_key = str(user_id)
     
-    # Если пользователя еще нет — создаем базовую запись
     if user_key not in data:
-        # Если это владелец (сравниваем с OWNER_ID из конфига)
         if user_id == config.OWNER_ID:
-            data[user_key] = {
-                "name": "KeAiAda", 
-                "affection": 100, 
-                "status": "любимый хозяин"
-            }
+            data[user_key] = {"name": "KeAiAda", "affection": 100, "status": "любимый хозяин"}
         else:
-            # Для всех остальных — нейтральное отношение
-            data[user_key] = {
-                "name": name or f"User_{user_id}", 
-                "affection": 0, 
-                "status": "незнакомец"
-            }
-        _save(data) # Сохраняем, чтобы в следующий раз уже было
+            data[user_key] = {"name": name or f"User_{user_id}", "affection": 0, "status": "незнакомец"}
+        _save(data)
         
     return data[user_key]
 
+def _status_for(user_id: int, affection: int) -> str:
+    """Вычислить статус по уровню симпатии (покрывает ВЕСЬ диапазон)."""
+    if affection >= 80:
+        return "любимый хозяин" if user_id == config.OWNER_ID else "обожаемый"
+    if affection >= 50:
+        return "очень близкий"
+    if affection >= 30:
+        return "друг"
+    if affection > 0:
+        return "приятель"
+    if affection == 0:
+        return "незнакомец"
+    if affection <= -50:
+        return "враг"
+    # от -49 до -1
+    return "бесячий"
+
 def update_affection(user_id: int, delta: int) -> None:
-    """
-    Изменяет уровень симпатии (например, +5 за хороший комплимент, -10 за грубость).
-    """
-    from core import config # Импортируем внутри функции, чтобы избежать циклов
-    
+    """Изменяет уровень симпатии (например, +5 за комплимент, -10 за грубость)."""
     data = _load()
     user_key = str(user_id)
-    
-    if user_key in data:
-        old_affection = data[user_key]["affection"]
-        
-        # ПРИВИЛЕГИЯ СОЗДАТЕЛЯ: Твой уровень не может упасть ниже 80.
-        # Даже если ты её назовешь дурой, она внутри всё равно тебя любит.
+
+    # Если пользователя ещё нет в базе — создаём дефолтную запись,
+    # иначе изменение симпатии молча терялось бы.
+    if user_key not in data:
         if user_id == config.OWNER_ID:
-            new_affection = max(80, min(100, old_affection + delta))
+            data[user_key] = {"name": "KeAiAda", "affection": 100, "status": "любимый хозяин"}
         else:
-            # Для всех остальных — стандартные рамки от -100 до 100
-            new_affection = max(-100, min(100, old_affection + delta))
-            
-        data[user_key]["affection"] = new_affection
-        
-        # Автоматически обновляем статус в зависимости от симпатии
-        if new_affection >= 80:
-            data[user_key]["status"] = "любимый хозяин" if user_id == config.OWNER_ID else "обожаемый"
-        elif new_affection >= 30:
-            data[user_key]["status"] = "друг"
-        elif new_affection <= -50:
-            data[user_key]["status"] = "враг"
-        elif new_affection <= -10:
-            data[user_key]["status"] = "бесячий"
-            
-        _save(data)
+            data[user_key] = {"name": f"User_{user_id}", "affection": 0, "status": "незнакомец"}
+
+    old_affection = data[user_key].get("affection", 0)
+
+    # Привилегия создателя: не может упасть ниже 80.
+    if user_id == config.OWNER_ID:
+        new_affection = max(80, min(100, old_affection + delta))
+    else:
+        new_affection = max(-100, min(100, old_affection + delta))
+
+    data[user_key]["affection"] = new_affection
+    data[user_key]["status"] = _status_for(user_id, new_affection)
+
+    _save(data)
+
+async def analyze_and_update(user_id: int, text: str, user_name: str):
+    """Анализирует текст через LLM и меняет уровень симпатии."""
+    prompt = (
+        "Оцени, как этот пользователь относится к тебе (Кее).\n"
+        "Верни строго JSON: {\"delta\": число_от_минус_10_до_плюс_10}\n"
+        "Примеры:\n"
+        "- Комплимент, забота, флирт -> +5\n"
+        "- Обычное общение (привет, как дела) -> +1\n"
+        "- Игнорирование, сухость -> 0\n"
+        "- Грубость, оскорбление -> -10"
+    )
+
+    try:
+        raw = await llm.chat(
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": text},
+            ],
+            model=config.LLM_UTILITY_MODEL,
+            # ВАЖНО: gpt-5-nano тратит токены на reasoning, и они входят
+            # в max_tokens. При лимите 30 бюджет съедался полностью и content
+            # приходил пустым — симпатия никогда не менялась.
+            max_tokens=2000,
+            temperature=0.1,
+            response_format={"type": "json_object"},
+        )
+
+        if not raw or not raw.strip():
+            logger.log("Пустой ответ LLM при анализе симпатии", source="relationship")
+            return
+
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw).strip()
+
+        start_idx = raw.find('{')
+        end_idx = raw.rfind('}')
+        if start_idx == -1 or end_idx == -1 or end_idx <= start_idx:
+            logger.log(f"Не найден JSON в ответе LLM: {raw[:120]!r}", source="relationship")
+            return
+
+        data = json.loads(raw[start_idx:end_idx+1])
+        delta = int(data.get("delta", 0))
+        # Ограничиваем разумными рамками на случай, если модель выдаст чушь.
+        delta = max(-10, min(10, delta))
+        if delta != 0:
+            update_affection(user_id, delta)
+            logger.log(f"Симпатия к {user_name} изменилась на {delta}", source="relationship")
+    except Exception as e:
+        # Не глотаем ошибки молча — иначе проблемы не видно в логах.
+        logger.log(f"Ошибка анализа симпатии: {type(e).__name__}: {e}", source="relationship")
+
+def get_other_names(owner_id: int) -> list[str]:
+    """Возвращает список имен всех пользователей (кроме владельца) для ревности."""
+    data = _load()
+    other_names = []
+    for uid_str, info in data.items():
+        if int(uid_str) != owner_id and info.get("name"):
+            other_names.append(info["name"].lower())
+    return other_names

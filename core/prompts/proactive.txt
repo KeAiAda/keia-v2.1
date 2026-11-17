@@ -11,3 +11,5 @@
 {"decision": "MESSAGE", "text": "сообщение"} 
 или 
 {"decision": "IGNORE"}
+
+ВАЖНО: Не пиши ничего, кроме JSON.
