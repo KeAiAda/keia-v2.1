@@ -25,7 +25,7 @@ def get_relation(user_id: int, name: str = None) -> dict:
     
     if user_key not in data:
         if user_id == config.OWNER_ID:
-            data[user_key] = {"name": "KeAiAda", "affection": 100, "status": "любимый хозяин"}
+            data[user_key] = {"name": config.OWNER_NAME, "affection": 100, "status": "любимый хозяин"}
         else:
             data[user_key] = {"name": name or f"User_{user_id}", "affection": 0, "status": "незнакомец"}
         _save(data)
@@ -58,7 +58,7 @@ def update_affection(user_id: int, delta: int) -> None:
     # иначе изменение симпатии молча терялось бы.
     if user_key not in data:
         if user_id == config.OWNER_ID:
-            data[user_key] = {"name": "KeAiAda", "affection": 100, "status": "любимый хозяин"}
+            data[user_key] = {"name": config.OWNER_NAME, "affection": 100, "status": "любимый хозяин"}
         else:
             data[user_key] = {"name": f"User_{user_id}", "affection": 0, "status": "незнакомец"}
 

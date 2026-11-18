@@ -30,7 +30,7 @@ def _load(user_id: int) -> dict[str, tuple[str, str]]:
     raw = storage.load_text(path)
     result = {}
 
-    # Регулярка для парсинга строки вида: [20.10.2026] имя: KeAiAda
+    # Регулярка для парсинга строки вида: [20.10.2026] имя: значение
     pattern = re.compile(r"^\[(\d{2}\.\d{2}\.\d{4})\]\s+(.+?):\s+(.+)$")
 
     for line in raw.splitlines():

@@ -46,6 +46,7 @@ async def summarize_day(user_id: int, date_str: str = None) -> str | None:
         return None
 
     prompt = storage.load_text(config.PROMPTS_DIR / "journal.txt").strip()
+    prompt = prompt.replace("{owner_name}", config.OWNER_NAME)
     
     messages = [
         {"role": "system", "content": prompt},

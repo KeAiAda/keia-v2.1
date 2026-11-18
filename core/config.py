@@ -105,3 +105,6 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "")
 # ID владельца (твой Discord ID). Нужен для проактивности и привилегий.
 # Если переменная не задана, int(None) выдаст ошибку, поэтому ставим "0" по умолчанию.
 OWNER_ID = int(os.getenv("OWNER_ID") or "0")
+
+# Имя владельца (как Кея его называет). Используется в промптах и коде.
+OWNER_NAME = os.getenv("OWNER_NAME", "KeAiAda")

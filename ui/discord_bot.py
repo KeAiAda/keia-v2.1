@@ -163,10 +163,10 @@ class KeiaBot(discord.Client):
         for guild in self.guilds:
             print(f"  - {guild.name} (ID: {guild.id})")
             
-        # Ставим статус "Слушает KeAiAda (:"
+        # Ставим статус "Слушает <владелец> (:"
         activity = discord.Activity(
             type=discord.ActivityType.listening, 
-            name="KeAiAda (:"
+            name=f"{config.OWNER_NAME} (:"
         )
         # "В сети" (зеленый кружок)
         await self.change_presence(status=discord.Status.online, activity=activity)
@@ -366,7 +366,7 @@ class KeiaBot(discord.Client):
 
                     # Собираем контекст (факты)
                     facts_text = facts.get_relevant(user_id, "интересы дела учеба", limit=5)
-                    prompt = storage.load_text(config.PROMPTS_DIR / "proactive.txt")
+                    prompt = storage.load_text(config.PROMPTS_DIR / "proactive.txt").replace("{owner_name}", config.OWNER_NAME)
                     user_context = f"Пользователь молчит уже {int(quiet_minutes/60)} часов.\nЧто ты о нём знаешь:\n{facts_text}"
 
                     try:

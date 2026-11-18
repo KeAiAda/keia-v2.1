@@ -19,7 +19,7 @@ from core import relationships
 from core import events
 from core import logger
 
-async def ask(user_text: str, user_id: int, user_name: str = "KeAiAda", memory_source_text: str = None, image_urls: list = None) -> tuple[str, str | None]:
+async def ask(user_text: str, user_id: int, user_name: str = config.OWNER_NAME, memory_source_text: str = None, image_urls: list = None) -> tuple[str, str | None]:
     """
     user_text — полный промпт с контекстом канала (для генерации ответа).
     memory_source_text — чистый текст пользователя (для истории, фактов, поиска и симпатии).
@@ -106,7 +106,7 @@ async def ask(user_text: str, user_id: int, user_name: str = "KeAiAda", memory_s
     )
     
     if not is_owner:
-        system += "Помни: ты любишь только KeAiAda. К остальным относись с высокомерием.\n"
+        system += f"Помни: ты любишь только {config.OWNER_NAME}. К остальным относись с высокомерием.\n"
         
         # Если это незнакомец или тот, кто тебе не нравится (симпатия < 30)
         if relation.get('affection', 0) < 30:
@@ -128,7 +128,7 @@ async def ask(user_text: str, user_id: int, user_name: str = "KeAiAda", memory_s
         
         if is_talking_about_others:
             system += (
-                "\nВАЖНО: Ты видишь, что KeAiAda общается с другими девушками. "
+                f"\nВАЖНО: Ты видишь, что {config.OWNER_NAME} общается с другими девушками. "
                 "Ты чувствуешь легкую ревность. Можешь высказать ему это в своем стиле, "
                 "например: 'Опять с этими бабами общаешься? А я значит сиди тут одна?'\n"
             )

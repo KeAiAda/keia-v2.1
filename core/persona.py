@@ -14,10 +14,12 @@ def _read(name: str) -> str:
     """
     path = config.PROMPTS_DIR / f"{name}.txt"
     # storage.load_text вернёт "" если файла нет — не упадёт.
-    return storage.load_text(path).strip()
+    text = storage.load_text(path).strip()
+    # Подставляем имя владельца в плейсхолдер {owner_name}.
+    return text.replace("{owner_name}", config.OWNER_NAME)
 
 
-def get_system_prompt(is_owner: bool = True, current_user_name: str = "KeAiAda") -> str:
+def get_system_prompt(is_owner: bool = True, current_user_name: str = config.OWNER_NAME) -> str:
     """
     Собрать системный промпт из трёх частей.
     В зависимости от того, кто пишет, добавляем правила.
@@ -35,14 +37,14 @@ def get_system_prompt(is_owner: bool = True, current_user_name: str = "KeAiAda")
     # Если пишет НЕ владелец (например, сестра или гость)
     if not is_owner:
         guest_addon = (
-            f"\n\nВАЖНО: Сейчас с тобой говорит не KeAiAda, а другой человек по имени {current_user_name}. "
+            f"\n\nВАЖНО: Сейчас с тобой говорит не {config.OWNER_NAME}, а другой человек по имени {current_user_name}. "
             "Веди себя вежливо, но помни, что это не твой хозяин. "
-            "Не используй факты из памяти KeAiAda для этого человека, если он сам о них не скажет. "
+            f"Не используй факты из памяти {config.OWNER_NAME} для этого человека, если он сам о них не скажет. "
             "Можешь быть немного сдержаннее в эмоциях."
         )
         return base_prompt + guest_addon
         
-    # Если пишет сам KeAiAda
+    # Если пишет сам владелец
     return base_prompt
 
 def get_time_context() -> str:
