@@ -55,3 +55,27 @@ async def chat(messages: list[dict], model: str | None = None, **options) -> str
     
     # Возвращаем текст ответа. Если вдруг content пустой, вернем пустую строку.
     return response.choices[0].message.content or ""
+
+
+# -------------------------------------------------------------------
+# 3. Эмбеддинги для семантического поиска
+# -------------------------------------------------------------------
+
+async def embed(texts: list[str]) -> list[list[float]]:
+    """
+    Получить эмбеддинги для списка текстов ОДНИМ батч-запросом.
+    Короткий таймаут (~10 с), чтобы бот не завис, если API эмбеддингов лежит.
+    """
+    if not texts:
+        return []
+
+    model = config.LLM_EMBED_MODEL.strip()
+    if not model:
+        raise RuntimeError("LLM_EMBED_MODEL не задан")
+
+    response = await client.with_options(timeout=10.0).embeddings.create(
+        model=model,
+        input=texts,
+    )
+
+    return [item.embedding for item in response.data]

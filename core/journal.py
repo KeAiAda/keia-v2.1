@@ -7,7 +7,7 @@ import os
 import re
 from datetime import datetime
 
-from core import config, storage, llm, logger
+from core import config, storage, llm, logger, memory_index
 
 # -------------------------------------------------------------------
 # 1. Сохранение сырого лога дня
@@ -115,3 +115,76 @@ def get_relevant_entries(user_id: int, query: str, limit: int = 2) -> str:
             result.append(f"### Запись от {date_str}:\n{short_content}")
             
     return "\n\n".join(result)
+
+async def get_relevant_entries_async(user_id: int, query: str, limit: int = 2,
+                                     query_vec: list[float] | None = None) -> str:
+    """
+    Асинхронная версия поиска по дневнику с эмбеддингами.
+    При включённом семантическом режиме индексируются ВСЕ записи (не только
+    последние 10 дней). Свежие записи остаются гарантированным минимумом.
+    При ошибке или выключенных эмбеддингах — старый поиск по словам.
+    """
+    if not config.JOURNAL_DIR.exists():
+        return ""
+
+    all_files = [
+        f for f in os.listdir(config.JOURNAL_DIR)
+        if f.startswith(f"{user_id}_") and f.endswith(".md")
+    ]
+    if not all_files:
+        return ""
+
+    if query_vec is None or not memory_index.is_enabled():
+        return get_relevant_entries(user_id, query, limit)
+
+    items = []
+    for filename in all_files:
+        path = config.JOURNAL_DIR / filename
+        content = storage.load_text(path)
+        date_str = filename.replace(f"{user_id}_", "").replace(".md", "")
+        items.append({
+            "text": content,
+            "date": date_str,
+            "filename": filename,
+            "content": content,
+        })
+
+    try:
+        vectors = await memory_index.ensure_embeddings(
+            user_id, "journal", [item["text"] for item in items]
+        )
+        for item, vec in zip(items, vectors):
+            item["vec"] = vec
+
+        ranked = memory_index.rank(
+            query_vec, items, limit, query_text=query
+        )
+
+        # Гарантированный минимум: если релевантных мало — добираем свежие.
+        if len(ranked) < limit:
+            by_name = {item["filename"]: item for item in items}
+            chosen = {item["filename"] for item in ranked}
+            for filename in sorted(all_files, reverse=True)[:10]:
+                if len(ranked) >= limit:
+                    break
+                if filename in chosen:
+                    continue
+                ranked.append(by_name[filename])
+                chosen.add(filename)
+
+        if not ranked:
+            return get_relevant_entries(user_id, query, limit)
+
+        result = []
+        for item in ranked:
+            content = item["content"]
+            short_content = content[:600] + "..." if len(content) > 600 else content
+            result.append(f"### Запись от {item['date']}:\n{short_content}")
+
+        return "\n\n".join(result)
+    except Exception as e:
+        logger.log(
+            f"Семантический поиск по дневнику не удался, fallback на слова: {e}",
+            source="journal",
+        )
+        return get_relevant_entries(user_id, query, limit)

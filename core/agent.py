@@ -17,6 +17,7 @@ from core import journal
 from core import search
 from core import relationships
 from core import events
+from core import memory_index
 from core import logger
 
 async def ask(user_text: str, user_id: int, user_name: str = config.OWNER_NAME, memory_source_text: str = None, image_urls: list = None) -> tuple[str, str | None]:
@@ -37,12 +38,27 @@ async def ask(user_text: str, user_id: int, user_name: str = config.OWNER_NAME, 
     # 3. Получаем текущее отношение к пользователю (нужно для поиска и ревности)
     relation = relationships.get_relation(user_id, user_name)
 
+    # 3.1. Считаем эмбеддинг запроса ОДИН раз за сообщение.
+    # Его используют и факты, и дневник. При ошибке — None (поиск по словам).
+    query_vec = None
+    if memory_index.is_enabled():
+        try:
+            query_vec = await memory_index.embed_query(source_text)
+        except Exception as e:
+            logger.log(
+                f"Эмбеддинг запроса не удался, fallback на слова: {e}",
+                source="memory_index",
+            )
+            query_vec = None
+
     # 4. Системный промпт (базовый характер и внешность)
     system = persona.get_system_prompt(is_owner=is_owner, current_user_name=user_name)
     system += "\n\n" + persona.get_time_context()
 
     # 5. Факты (долговременная память)
-    relevant_facts = facts.get_relevant(user_id, source_text)
+    relevant_facts = await facts.get_relevant_async(
+        user_id, source_text, query_vec=query_vec
+    )
     if relevant_facts:
         system += f"\n\nПамять о человеке ({user_name}):\n{relevant_facts}"
 
@@ -62,7 +78,9 @@ async def ask(user_text: str, user_id: int, user_name: str = config.OWNER_NAME, 
             system += "(Помни об этих событиях и используй их, если разговор зайдет о планах на будущее)."
 
     # 7. Дневник (эмоциональные воспоминания)
-    journal_entries = journal.get_relevant_entries(user_id, source_text)
+    journal_entries = await journal.get_relevant_entries_async(
+        user_id, source_text, query_vec=query_vec
+    )
     if journal_entries:
         system += f"\n\nТвои личные записи из дневника (о чём вы говорили раньше):\n{journal_entries}"
 

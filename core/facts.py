@@ -12,6 +12,7 @@ from core import config
 from core import storage
 from core import llm
 from core import logger
+from core import memory_index
 
 # -------------------------------------------------------------------
 # 1. Работа с файлом фактов (Чтение и Запись)
@@ -229,3 +230,53 @@ def get_relevant(user_id: int, query: str, limit: int = 8) -> str:
     top = scored[:limit]
     lines = [f"- {key}: {value}" for _, key, value, _ in top]
     return "\n".join(lines)
+
+async def get_relevant_async(user_id: int, query: str, limit: int = 8,
+                             query_vec: list[float] | None = None) -> str:
+    """
+    Асинхронная версия поиска фактов с эмбеддингами.
+    query_vec считается один раз в agent.py и передаётся готовым.
+    При любой проблеме или выключенных эмбеддингах — старый поиск по словам.
+    """
+    facts = _load(user_id)
+    if not facts:
+        return ""
+
+    # Если фактов мало — отдаем все, как и раньше.
+    if len(facts) <= limit:
+        lines = [f"- {key}: {value}" for key, (value, _) in facts.items()]
+        return "\n".join(lines)
+
+    if query_vec is None or not memory_index.is_enabled():
+        return get_relevant(user_id, query, limit)
+
+    items = []
+    for key, (value, date) in facts.items():
+        items.append({
+            "text": f"{key}: {value}",
+            "date": date,
+            "key": key,
+            "value": value,
+        })
+
+    try:
+        vectors = await memory_index.ensure_embeddings(
+            user_id, "facts", [item["text"] for item in items]
+        )
+        for item, vec in zip(items, vectors):
+            item["vec"] = vec
+
+        ranked = memory_index.rank(
+            query_vec, items, limit, query_text=query
+        )
+        if not ranked:
+            return get_relevant(user_id, query, limit)
+
+        lines = [f"- {item['key']}: {item['value']}" for item in ranked]
+        return "\n".join(lines)
+    except Exception as e:
+        logger.log(
+            f"Семантический поиск фактов не удался, fallback на слова: {e}",
+            source="facts",
+        )
+        return get_relevant(user_id, query, limit)
