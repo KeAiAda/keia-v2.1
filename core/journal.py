@@ -157,7 +157,7 @@ async def get_relevant_entries_async(user_id: int, query: str, limit: int = 2,
             item["vec"] = vec
 
         ranked = memory_index.rank(
-            query_vec, items, limit, query_text=query
+            query_vec, items, limit, query_text=query, source="journal"
         )
 
         # Гарантированный минимум: если релевантных мало — добираем свежие.

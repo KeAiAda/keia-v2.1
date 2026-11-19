@@ -267,10 +267,11 @@ async def get_relevant_async(user_id: int, query: str, limit: int = 8,
             item["vec"] = vec
 
         ranked = memory_index.rank(
-            query_vec, items, limit, query_text=query
+            query_vec, items, limit, query_text=query, source="facts"
         )
         if not ranked:
-            return get_relevant(user_id, query, limit)
+            # Ничего не прошло порог — лучше не добавлять мусор в промпт.
+            return ""
 
         lines = [f"- {item['key']}: {item['value']}" for item in ranked]
         return "\n".join(lines)

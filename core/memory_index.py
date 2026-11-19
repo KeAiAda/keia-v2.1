@@ -119,40 +119,63 @@ def _cache_path(user_id: int):
     return config.MEMORY_DIR / f"embeddings_{user_id}.json"
 
 
-def _key(text: str, model: str) -> str:
-    """Ключ кэша: sha1(модель + текст)."""
-    raw = f"{model}:{text}".encode("utf-8")
+def _dimensions() -> int | None:
+    """Размерность эмбеддингов из конфига (None = не задана)."""
+    return config.LLM_EMBED_DIMENSIONS
+
+
+def _signature() -> str:
+    """Подпись кэша: модель + размерность. При её смене кэш сбрасывается."""
+    dim = _dimensions()
+    return f"{_model()}|{dim if dim is not None else ''}"
+
+
+def _key(text: str, signature: str) -> str:
+    """Ключ кэша: sha1(подпись модели + текст)."""
+    raw = f"{signature}:{text}".encode("utf-8")
     return hashlib.sha1(raw).hexdigest()
 
 
-def _load_cache(user_id: int, model: str) -> dict:
-    """Прочитать кэш. Если модель сменилась — старый кэш сбрасываем."""
+def _round_vec(vec: list[float]) -> list[float]:
+    """Округлить компоненты вектора до 5 знаков."""
+    return [round(float(x), 5) for x in vec]
+
+
+def _round_namespace(namespace: dict) -> dict:
+    return {k: _round_vec(v) for k, v in namespace.items()}
+
+
+def _load_cache(user_id: int, signature: str) -> dict:
+    """Прочитать кэш. Если модель/размерность сменились — кэш сбрасываем."""
     data = storage.load_json(_cache_path(user_id), default={})
     if not isinstance(data, dict):
         data = {}
 
-    if data.get("model") != model:
-        return {"model": model, "namespaces": {}}
+    if data.get("signature") != signature:
+        return {"signature": signature, "namespaces": {}}
 
     namespaces = data.get("namespaces")
     if not isinstance(namespaces, dict):
         namespaces = {}
 
-    return {"model": model, "namespaces": namespaces}
+    return {"signature": signature, "namespaces": namespaces}
 
 
 async def ensure_embeddings(user_id: int, namespace: str, texts: list[str]) -> list[list[float]]:
     """
     Вернуть эмбеддинги для texts, лениво досчитав только отсутствующие.
-    Кэш чистится: записи, которых больше нет в texts, удаляются из namespace.
+    Недостающие тексты считаются чанками по 32, кэш сохраняется после каждого
+    чанка (прогресс не теряется при ошибке). Устаревшие записи чистятся.
+    Кэш пишется только если были добавлены или удалены ключи.
     """
     model = _model()
     if not model:
         raise RuntimeError("LLM_EMBED_MODEL не задан")
 
-    keys = [_key(t, model) for t in texts]
+    signature = _signature()
+    keys = [_key(t, signature) for t in texts]
 
-    cache = _load_cache(user_id, model)
+    cache = _load_cache(user_id, signature)
     namespace_cache = cache["namespaces"].get(namespace)
     if not isinstance(namespace_cache, dict):
         namespace_cache = {}
@@ -169,26 +192,43 @@ async def ensure_embeddings(user_id: int, namespace: str, texts: list[str]) -> l
             missing_texts.append(text)
             missing_keys.append(key)
 
-    if missing_texts:
-        vectors = await llm.embed(missing_texts)
-        if len(vectors) != len(missing_texts):
+    added = 0
+    chunk_size = 32
+
+    for start in range(0, len(missing_texts), chunk_size):
+        chunk_texts = missing_texts[start:start + chunk_size]
+        chunk_keys = missing_keys[start:start + chunk_size]
+
+        vectors = await llm.embed(chunk_texts)
+        if len(vectors) != len(chunk_texts):
             raise RuntimeError("LLM вернул неверное число эмбеддингов")
 
-        for key, vec in zip(missing_keys, vectors):
-            namespace_cache[key] = vec
+        for key, vec in zip(chunk_keys, vectors):
+            namespace_cache[key] = _round_vec(vec)
+
+        added += len(chunk_texts)
+
+        # Сохраняем прогресс после каждого чанка.
+        cache["namespaces"][namespace] = _round_namespace(namespace_cache)
+        storage.atomic_write_json(_cache_path(user_id), cache)
 
     # Оставляем только актуальные записи этого namespace (устаревшие чистим).
     current_keys = set(keys)
-    cleaned = {k: v for k, v in namespace_cache.items() if k in current_keys}
+    cleaned = {
+        k: _round_vec(v) for k, v in namespace_cache.items() if k in current_keys
+    }
+    removed = len(namespace_cache) - len(cleaned)
 
     cache["namespaces"][namespace] = cleaned
-    storage.atomic_write_json(_cache_path(user_id), cache)
+
+    if added or removed:
+        storage.atomic_write_json(_cache_path(user_id), cache)
 
     total = sum(
         len(ns) for ns in cache["namespaces"].values() if isinstance(ns, dict)
     )
     logger.log(
-        f"Эмбеддинги [{namespace}]: добавлено {len(missing_texts)}, "
+        f"Эмбеддинги [{namespace}]: добавлено {added}, удалено {removed}, "
         f"в кэше {total}",
         source="memory_index",
     )
@@ -212,38 +252,51 @@ async def embed_query(text: str) -> list[float] | None:
 # -------------------------------------------------------------------
 
 def rank(query_vec: list[float], items: list[dict], limit: int,
-         min_similarity: float = MIN_SIMILARITY, query_text: str = "") -> list[dict]:
+         min_similarity: float = MIN_SIMILARITY, query_text: str = "",
+         source: str = "memory_index") -> list[dict]:
     """
     Отобрать top-limit элементов по гибридному скору:
     cosine + бонус за слова + бонус за свежесть.
 
     item — словарь с полями: vec (обязательно), text (для бонуса слов),
     date (опционально, для бонуса свежести). Возвращаются копии с полем score.
+    Для подбора MIN_SIMILARITY в лог пишется топ-3 скора до отсечения порогом.
     """
     if not query_vec or not items:
         return []
 
     query_tokens = _tokenize(query_text)
-    scored: list[tuple[float, dict]] = []
+    all_scored: list[tuple[float, float, dict]] = []
 
     for item in items:
         cos = cosine(query_vec, item.get("vec") or [])
-        if cos < min_similarity:
-            continue
-
         score = cos
         score += _word_bonus(query_tokens, item.get("text", ""))
         score += _fresh_bonus(item.get("date"))
+        all_scored.append((score, cos, item))
 
-        scored.append((score, item))
+    all_scored.sort(key=lambda x: x[0], reverse=True)
 
-    scored.sort(key=lambda x: x[0], reverse=True)
+    preview = []
+    for score, cos, item in all_scored[:3]:
+        text = str(item.get("text", "")).replace("\n", " ")[:40]
+        preview.append(f"{score:.3f} (cos={cos:.3f}) | {text}")
+    logger.log(
+        "Топ-3 скора: " + ("; ".join(preview) if preview else "нет элементов"),
+        source=source,
+    )
 
     result = []
-    for score, item in scored[:limit]:
+    for score, cos, item in all_scored:
+        if cos < min_similarity:
+            continue
+
         copy = dict(item)
         copy["score"] = score
         result.append(copy)
+
+        if len(result) >= limit:
+            break
 
     return result
 
@@ -255,6 +308,7 @@ def rank(query_vec: list[float], items: list[dict], limit: int,
 logger.log(
     "Семантический поиск "
     + ("включён" if is_enabled() else "выключен")
-    + f" (модель: {_model() or 'не задана'})",
+    + f" (модель: {_model() or 'не задана'}, "
+    + f"размерность: {_dimensions() if _dimensions() is not None else 'по умолчанию'})",
     source="memory_index",
 )

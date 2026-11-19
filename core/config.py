@@ -98,6 +98,14 @@ LLM_HISTORY_LIMIT = int(os.getenv("LLM_HISTORY_LIMIT", "10"))
 # Пустое значение = семантический поиск выключен (работает старый поиск по словам).
 LLM_EMBED_MODEL = os.getenv("LLM_EMBED_MODEL", "").strip()
 
+# Необязательная размерность векторов эмбеддингов.
+# Пустое значение = не передавать dimensions в API.
+_embed_dim_raw = os.getenv("LLM_EMBED_DIMENSIONS", "").strip()
+try:
+    LLM_EMBED_DIMENSIONS = int(_embed_dim_raw) if _embed_dim_raw else None
+except ValueError:
+    LLM_EMBED_DIMENSIONS = None
+
 
 # -------------------------------------------------------------------
 # 5. Настройки Discord
