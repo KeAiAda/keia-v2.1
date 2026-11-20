@@ -5,7 +5,7 @@
 
 import json
 import re
-from core import config, storage, llm, logger
+from core import config, storage, llm, logger, mood
 
 # Путь к файлу с отношениями.
 RELATIONSHIPS_FILE = config.MEMORY_DIR / "relationships.json"
@@ -119,6 +119,8 @@ async def analyze_and_update(user_id: int, text: str, user_name: str):
         delta = int(data.get("delta", 0))
         # Ограничиваем разумными рамками на случай, если модель выдаст чушь.
         delta = max(-10, min(10, delta))
+        # Настроение меняется всегда (в том числе при delta == 0), чтобы шло затухание.
+        mood.apply_delta(delta)
         if delta != 0:
             update_affection(user_id, delta)
             logger.log(f"Симпатия к {user_name} изменилась на {delta}", source="relationship")

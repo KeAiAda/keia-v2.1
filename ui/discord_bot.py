@@ -23,6 +23,7 @@ import discord      # Главная библиотека для Discord
 from core import agent, history, config, facts, llm, storage
 from core import logger
 from core import journal
+from core import mood
 
 # -------------------------------------------------------------------
 # 1. Вспомогательные функции для работы с картинками
@@ -196,6 +197,26 @@ class KeiaBot(discord.Client):
         # Игнорируем сообщения от самого бота
         if message.author == self.user:
             return
+
+        # Команды владельца для проверки настроения.
+        # Такие сообщения не идут в агент, историю и дневник.
+        raw_text = message.content.strip()
+        if message.author.id == config.OWNER_ID and raw_text.startswith("!mood"):
+            try:
+                parts = raw_text.split()
+                if len(parts) >= 3 and parts[1].lower() == "set":
+                    try:
+                        value = float(parts[2].replace(",", "."))
+                    except ValueError:
+                        await message.channel.send("Не поняла число (:")
+                        return
+                    mood.set_valence(value)
+                await message.channel.send(
+                    f"Настроение: {mood.get_state()} (valence: {mood.get_valence():.1f})"
+                )
+            except Exception as e:
+                logger.log(f"Ошибка команды !mood: {e}", source="error")
+            return
             
         # Проверяем: это личка (DM) или нас упомянули через @?
         is_dm = isinstance(message.channel, discord.DMChannel)
@@ -367,6 +388,7 @@ class KeiaBot(discord.Client):
                     # Собираем контекст (факты)
                     facts_text = facts.get_relevant(user_id, "интересы дела учеба", limit=5)
                     prompt = storage.load_text(config.PROMPTS_DIR / "proactive.txt").replace("{owner_name}", config.OWNER_NAME)
+                    prompt += "\n\n" + mood.get_prompt_line()
                     user_context = f"Пользователь молчит уже {int(quiet_minutes/60)} часов.\nЧто ты о нём знаешь:\n{facts_text}"
 
                     try:

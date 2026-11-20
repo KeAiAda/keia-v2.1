@@ -19,6 +19,7 @@ from core import relationships
 from core import events
 from core import memory_index
 from core import logger
+from core import mood
 
 async def ask(user_text: str, user_id: int, user_name: str = config.OWNER_NAME, memory_source_text: str = None, image_urls: list = None) -> tuple[str, str | None]:
     """
@@ -54,6 +55,11 @@ async def ask(user_text: str, user_id: int, user_name: str = config.OWNER_NAME, 
     # 4. Системный промпт (базовый характер и внешность)
     system = persona.get_system_prompt(is_owner=is_owner, current_user_name=user_name)
     system += "\n\n" + persona.get_time_context()
+
+    # Отмечаем, что владелец только что написал (влияет на "скучает").
+    if is_owner:
+        mood.mark_owner_message()
+    system += "\n\n" + mood.get_prompt_line()
 
     # 5. Факты (долговременная память)
     relevant_facts = await facts.get_relevant_async(
